@@ -20,8 +20,9 @@ class Bot(Client):
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
             plugins=dict(root="TechVJ"),
-            workers=150,
-            sleep_threshold=5
+            workers=200,
+            sleep_threshold=10,
+            max_concurrent_transmissions=5
         )
 
       
