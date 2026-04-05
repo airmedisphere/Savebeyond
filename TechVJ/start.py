@@ -5,6 +5,7 @@
 import os
 import asyncio
 import time
+import io
 import pyrogram
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, UserAlreadyParticipant, InviteHashExpired, UsernameNotOccupied
@@ -17,6 +18,7 @@ from bot import TechVJUser
 class batch_temp(object):
     IS_BATCH = {}
     PROGRESS_DATA = {}
+    THUMB_CACHE = {}
 
 async def progress_tracker(client, status_msg_id, chat_id):
     last_update = 0
@@ -38,6 +40,30 @@ def progress(current, total, status_msg_id, status_type):
             'status': status_type,
             'progress': (current * 100 / total)
         }
+
+async def download_to_memory(client, msg, progress_callback, progress_args):
+    file_buffer = io.BytesIO()
+    await client.download_media(msg, file_buffer, progress=progress_callback, progress_args=progress_args)
+    file_buffer.seek(0)
+    return file_buffer
+
+async def get_thumbnail(client, thumb_file_id, cache_key):
+    if cache_key in batch_temp.THUMB_CACHE:
+        return batch_temp.THUMB_CACHE[cache_key]
+
+    try:
+        thumb_data = io.BytesIO()
+        await client.download_media(thumb_file_id, thumb_data)
+        thumb_data.seek(0)
+        batch_temp.THUMB_CACHE[cache_key] = thumb_data
+
+        if len(batch_temp.THUMB_CACHE) > 50:
+            oldest_key = next(iter(batch_temp.THUMB_CACHE))
+            del batch_temp.THUMB_CACHE[oldest_key]
+
+        return thumb_data
+    except:
+        return None
 
 # start command
 @Client.on_message(filters.command(["start"]))
@@ -203,7 +229,6 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
             return
 
     smsg = await client.send_message(message.chat.id, '**Processing...**', reply_to_message_id=message.id)
-
     asyncio.create_task(progress_tracker(client, smsg.id, message.chat.id))
 
     caption = msg.caption if msg.caption else None
@@ -213,121 +238,66 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
             return
 
         if "Document" == msg_type:
-            ph_path = None
-            try:
-                ph_path = await acc.download_media(msg.document.thumbs[0].file_id)
-            except:
-                pass
+            ph_buffer = await get_thumbnail(acc, msg.document.thumbs[0].file_id, f"doc_{msg.document.file_id}") if msg.document.thumbs else None
 
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
-                if ph_path and os.path.exists(ph_path):
-                    os.remove(ph_path)
                 return
 
-            await client.send_document(chat, file, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
-
-            if ph_path and os.path.exists(ph_path):
-                os.remove(ph_path)
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_document(chat, file_buffer, thumb=ph_buffer, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
 
         elif "Video" == msg_type:
-            ph_path = None
-            try:
-                ph_path = await acc.download_media(msg.video.thumbs[0].file_id)
-            except:
-                pass
+            ph_buffer = await get_thumbnail(acc, msg.video.thumbs[0].file_id, f"vid_{msg.video.file_id}") if msg.video.thumbs else None
 
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
-                if ph_path and os.path.exists(ph_path):
-                    os.remove(ph_path)
                 return
 
-            await client.send_video(chat, file, duration=msg.video.duration, width=msg.video.width, height=msg.video.height, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
-
-            if ph_path and os.path.exists(ph_path):
-                os.remove(ph_path)
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_video(chat, file_buffer, duration=msg.video.duration, width=msg.video.width, height=msg.video.height, thumb=ph_buffer, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
 
         elif "Animation" == msg_type:
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
                 return
 
-            await client.send_animation(chat, file, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_animation(chat, file_buffer, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
 
         elif "Sticker" == msg_type:
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
                 return
 
-            await client.send_sticker(chat, file, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_sticker(chat, file_buffer, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
 
         elif "Voice" == msg_type:
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
                 return
 
-            await client.send_voice(chat, file, caption=caption, caption_entities=msg.caption_entities, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_voice(chat, file_buffer, caption=caption, caption_entities=msg.caption_entities, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
 
         elif "Audio" == msg_type:
-            ph_path = None
-            try:
-                ph_path = await acc.download_media(msg.audio.thumbs[0].file_id)
-            except:
-                pass
+            ph_buffer = await get_thumbnail(acc, msg.audio.thumbs[0].file_id, f"aud_{msg.audio.file_id}") if msg.audio.thumbs else None
 
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
-                if ph_path and os.path.exists(ph_path):
-                    os.remove(ph_path)
                 return
 
-            await client.send_audio(chat, file, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
-
-            if ph_path and os.path.exists(ph_path):
-                os.remove(ph_path)
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_audio(chat, file_buffer, thumb=ph_buffer, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[smsg.id, "Uploading"])
 
         elif "Photo" == msg_type:
-            file = await acc.download_media(msg, progress=progress, progress_args=[smsg.id, "Downloading"])
+            file_buffer = await download_to_memory(acc, msg, progress, [smsg.id, "Downloading"])
 
             if batch_temp.IS_BATCH.get(message.from_user.id):
-                if file and os.path.exists(file):
-                    os.remove(file)
                 return
 
-            await client.send_photo(chat, file, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
-            if file and os.path.exists(file):
-                os.remove(file)
+            await client.send_photo(chat, file_buffer, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
 
     except Exception as e:
         if ERROR_MESSAGE == True:
